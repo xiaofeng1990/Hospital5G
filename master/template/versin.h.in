@@ -1,0 +1,9 @@
+#ifndef SCHEDULER_VERSION_H_
+#define SCHEDULER_VERSION_H_
+
+#define TO_STR(x) #x
+#define STRCAT(x) TO_STR(x)
+
+#define CONFIG_FILE "./master/config/config.ini"
+
+#endif // SCHEDULER_VERSION_H_

@@ -21,11 +21,11 @@ static XfSeverity g_min_log_level = XF_DEBUG;
 static bool g_is_save_to_file = true;
 
 static bool g_log_to_stderr = true;
-static bool g_use_process_name_for_file = false;
+static bool g_use_process_name_for_file = true;
 
 static const size_t kMaxLogMessageLen = 2048;
 static const size_t K1M = 1 * 1024 * 1024;     // 1M
-static const size_t kMaxLogFileSize = 1 * K1M; // 1M
+static const size_t kMaxLogFileSize = 50 * K1M; // 50M
 static constexpr const int kFilePathSize = 256;
 static char g_save_path[kFilePathSize] = "./log";
 static bool g_save_path_updated = false;

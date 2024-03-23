@@ -34,6 +34,12 @@ else()
     set(XT_GIT_ONELINE "unknow")
 endif()
 
+configure_file("${CMAKE_SOURCE_DIR}/master/template/versin.h.in"
+    "${CMAKE_BINARY_DIR}/include/version.h")
+include_directories(${CMAKE_BINARY_DIR}/include)
+
+
+# glib
 find_package(PkgConfig REQUIRED)
 pkg_search_module(GLIB REQUIRED glib-2.0)
 pkg_search_module(GLIB REQUIRED glib-2.0)
@@ -43,18 +49,33 @@ include_directories(${GLIB_INCLUDE_DIRS})
 link_directories(${GLIB_LIBRARY_DIRS})
 set(LINKS_LIBS ${LINKS_LIBS}  ${GLIB_LIBRARIES})
 
+
+include_directories(.)
+# wiring pi
+link_directories(/usr/local/lib)
+include_directories(/usr/local/include)
+set(LINKS_LIBS ${LINKS_LIBS}  wiringPi wiringPiDev)
+
+# linksdk
+link_directories("${CMAKE_SOURCE_DIR}/3rd-party/linksdk/lib")
+include_directories("${CMAKE_SOURCE_DIR}/3rd-party/linksdk/include")
+set(LINKS_LIBS ${LINKS_LIBS}  libaiot.a)
+
+
 set(XT_COMPILE_FLAGS "-g -O3 -ffunction-sections -fdata-sections -funwind-tables")
 set(XT_COMPILE_FLAGS "${XT_COMPILE_FLAGS} -fstack-protector-strong")
 
 set(CMAKE_C_FLAGS    "${XT_COMPILE_FLAGS}")
 set(CMAKE_CXX_FLAGS  "${XT_COMPILE_FLAGS}")
 
-aux_source_directory(${PROJECT_SOURCE_DIR}/xfframework             XFFRAMEWORK_SRC_FILES)
+aux_source_directory(${PROJECT_SOURCE_DIR}/xfframework       XFFRAMEWORK_SRC_FILES)
+aux_source_directory(${PROJECT_SOURCE_DIR}/usart             USART_SRC_FILES)
 
 set(TARGET_NAME hospital5g)
 add_executable(${TARGET_NAME}
     main.cc
     ${XFFRAMEWORK_SRC_FILES}
+    ${USART_SRC_FILES}
   )
 
 
