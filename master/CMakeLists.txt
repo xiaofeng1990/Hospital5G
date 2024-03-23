@@ -1,0 +1,66 @@
+cmake_minimum_required(VERSION 3.10)
+
+project(hospital5g CXX C)
+
+
+set(EXECUTABLE_OUTPUT_PATH "${CMAKE_BINARY_DIR}/bin" CACHE PATH "output directory")
+set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install")
+
+set(CMAKE_SKIP_BUILD_RPATH FALSE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
+set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
+
+
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+
+find_package(Git QUIET)
+if (GIT_FOUND)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" describe --tags --always --dirty --match "[0-9].[0-9].[0-9]*"
+        WORKING_DIRECTORY "${${PROJECT_NAME}_SOURCE_DIR}"
+        OUTPUT_VARIABLE XT_GIT_ONELINE
+        RESULT_VARIABLE GET_RESULT
+        ERROR_QUIET
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if (NOT GET_RESULT EQUAL 0)
+        set(XT_GIT_ONELINE "unknow")
+    endif()
+else()
+    set(XT_GIT_ONELINE "unknow")
+endif()
+
+find_package(PkgConfig REQUIRED)
+pkg_search_module(GLIB REQUIRED glib-2.0)
+pkg_search_module(GLIB REQUIRED glib-2.0)
+MESSAGE(STATUS "glib-2.0 dirs:" ${GLIB_INCLUDE_DIRS})
+MESSAGE(STATUS "glib-2.0 lib:" ${GLIB_LIBRARIES})
+include_directories(${GLIB_INCLUDE_DIRS})
+link_directories(${GLIB_LIBRARY_DIRS})
+set(LINKS_LIBS ${LINKS_LIBS}  ${GLIB_LIBRARIES})
+
+set(XT_COMPILE_FLAGS "-g -O3 -ffunction-sections -fdata-sections -funwind-tables")
+set(XT_COMPILE_FLAGS "${XT_COMPILE_FLAGS} -fstack-protector-strong")
+
+set(CMAKE_C_FLAGS    "${XT_COMPILE_FLAGS}")
+set(CMAKE_CXX_FLAGS  "${XT_COMPILE_FLAGS}")
+
+aux_source_directory(${PROJECT_SOURCE_DIR}/xfframework             XFFRAMEWORK_SRC_FILES)
+
+set(TARGET_NAME hospital5g)
+add_executable(${TARGET_NAME}
+    main.cc
+    ${XFFRAMEWORK_SRC_FILES}
+  )
+
+
+target_link_libraries(${TARGET_NAME} PRIVATE  ${LINKS_LIBS})
+
+# set_target_properties(${TARGET_NAME}  PROPERTIES LINK_FLAGS "-Wl,--disable-new-dtags,-rpath,${CMAKE_INSTALL_PREFIX}/lib:${FASTDEPLOY_ASCEND_DIR}/third_libs/install/opencv/lib")
+set_target_properties(${TARGET_NAME}  PROPERTIES LINK_FLAGS "-Wl,--disable-new-dtags,-rpath,${CMAKE_INSTALL_PREFIX}/lib")
+
+install(TARGETS ${TARGET_NAME} RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX})
