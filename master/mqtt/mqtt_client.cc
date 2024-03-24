@@ -2,6 +2,13 @@
 #include "xfframework/config.h"
 #include "xfframework/logging.h"
 #include "version.h"
+#include <functional>
+#include <unistd.h>
+#include "xfframework/json.hpp"
+extern aiot_sysdep_portfile_t g_aiot_sysdep_portfile;
+extern const char *ali_ca_cert;
+MqttClient *MqttClient::mqtt_this_ = nullptr;
+using json = nlohmann::json;
 MqttClient::MqttClient()
 {
     // load mqtt config
@@ -18,9 +25,87 @@ MqttClient::MqttClient()
     XF_LOGT(INFO, TAG, "mqtt_host %s\n", mqtt_host_.c_str());
     config.Get("mqtt", "port", port_);
     XF_LOGT(INFO, TAG, "port %d\n", port_);
+
+    subscribe_topic_ = "/" + product_key_ + "/" + device_name_ + "/user/get";
+    publish_topic_ = "/" + product_key_ + "/" + device_name_ + "/user/update";
+
+    Connect();
+    Subscribe(subscribe_topic_);
+    /* 创建一个单独的线程, 专用于执行aiot_mqtt_process, 它会自动发送心跳保活, 以及重发QoS1的未应答报文 */
+    mqtt_process_thread_running_ = 1;
+    mqtt_process_thread_.reset(new std::thread(std::bind(&MqttClient::MqttProcessThread, this, mqtt_handle_)));
+
+    /* 创建一个单独的线程用于执行aiot_mqtt_recv, 它会循环收取服务器下发的MQTT消息, 并在断线时自动重连 */
+    mqtt_recv_thread_running_ = 1;
+    mqtt_recv_thread_.reset(new std::thread(std::bind(&MqttClient::MqttRecvThread, this, mqtt_handle_)));
+    mqtt_this_ = this;
 }
 MqttClient::~MqttClient()
 {
+    mqtt_process_thread_running_ = 0;
+    mqtt_recv_thread_running_ = 0;
+    int32_t res = STATE_SUCCESS;
+    /* 断开MQTT连接, 一般不会运行到这里 */
+    res = aiot_mqtt_disconnect(mqtt_handle_);
+    if (res < STATE_SUCCESS)
+    {
+        aiot_dm_deinit(&dm_handle_);
+        aiot_mqtt_deinit(&mqtt_handle_);
+        printf("aiot_mqtt_disconnect failed: -0x%04X\n", -res);
+    }
+
+    /* 销毁DATA-MODEL实例, 一般不会运行到这里 */
+    res = aiot_dm_deinit(&dm_handle_);
+    if (res < STATE_SUCCESS)
+    {
+        printf("aiot_dm_deinit failed: -0x%04X\n", -res);
+    }
+
+    /* 销毁MQTT实例, 一般不会运行到这里 */
+    res = aiot_mqtt_deinit(&mqtt_handle_);
+    if (res < STATE_SUCCESS)
+    {
+        printf("aiot_mqtt_deinit failed: -0x%04X\n", -res);
+    }
+    mqtt_process_thread_->join();
+    mqtt_recv_thread_->join();
+}
+
+/* 执行aiot_mqtt_process的线程, 包含心跳发送和QoS1消息重发 */
+void MqttClient::MqttProcessThread(void *args)
+{
+    int32_t res = STATE_SUCCESS;
+
+    while (mqtt_process_thread_running_)
+    {
+        res = aiot_mqtt_process(args);
+        if (res == STATE_USER_INPUT_EXEC_DISABLED)
+        {
+            break;
+        }
+        sleep(1);
+        // XF_LOGT(INFO, TAG, "MqttProcessThread %p", args);
+    }
+}
+
+/* 执行aiot_mqtt_recv的线程, 包含网络自动重连和从服务器收取MQTT消息 */
+void MqttClient::MqttRecvThread(void *args)
+{
+    int32_t res = STATE_SUCCESS;
+
+    while (mqtt_recv_thread_running_)
+    {
+        res = aiot_mqtt_recv(args);
+        if (res < STATE_SUCCESS)
+        {
+            if (res == STATE_USER_INPUT_EXEC_DISABLED)
+            {
+                break;
+            }
+            sleep(1);
+            // XF_LOGT(INFO, TAG, "MqttRecvThread %p", args);
+        }
+    }
 }
 
 int32_t MqttClient::StateLogcb(int32_t code, char *message)
@@ -63,6 +148,47 @@ void MqttClient::MqttEventHandler(void *handle, const aiot_mqtt_event_t *event, 
     }
 }
 
+void MqttClient::DmRecvAsyncServiceInvoke(void *dm_handle, const aiot_dm_recv_t *recv, void *userdata)
+{
+
+    XF_LOGT(INFO, TAG, "DmRecvAsyncServiceInvoke msg_id = %ld, service_id = %s, params = %.*s\r\n",
+            (unsigned long)recv->data.async_service_invoke.msg_id,
+            recv->data.async_service_invoke.service_id,
+            recv->data.async_service_invoke.params_len,
+            recv->data.async_service_invoke.params);
+
+    // 解析json
+    XF_LOGT(INFO, TAG, "get mqtt data %s", recv->data.async_service_invoke.params);
+    XF_LOGT(INFO, TAG, "get mqtt data len %d ", recv->data.async_service_invoke.params_len);
+    std::string jdata = std::string(recv->data.async_service_invoke.params, recv->data.async_service_invoke.params_len);
+    auto jroot = json::parse(jdata);
+    std::string cmd = jroot["action"];
+    XF_LOGT(INFO, TAG, "get mqtt cmd %s", cmd.c_str());
+    mqtt_this_->usart_send_cb_(cmd.c_str());
+
+    /* TODO: 以下代码演示如何对来自云平台的异步服务调用进行应答, 用户可取消注释查看演示效果
+     *
+     * 注意: 如果用户在回调函数外进行应答, 需要自行保存 msg_id, 因为回调函数入参在退出回调函数后将被SDK销毁, 不可以再访问到
+     */
+
+    /*
+    {
+        aiot_dm_msg_t msg;
+
+        memset(&msg, 0, sizeof(aiot_dm_msg_t));
+        msg.type = AIOT_DMMSG_ASYNC_SERVICE_REPLY;
+        msg.data.async_service_reply.msg_id = recv->data.async_service_invoke.msg_id;
+        msg.data.async_service_reply.code = 200;
+        msg.data.async_service_reply.service_id = "ToggleLightSwitch";
+        msg.data.async_service_reply.data = "{\"dataA\": 20}";
+        int32_t res = aiot_dm_send(dm_handle, &msg);
+        if (res < 0) {
+            printf("aiot_dm_send failed\r\n");
+        }
+    }
+    */
+}
+
 /* 用户数据接收处理回调函数 */
 void MqttClient::DmRecvHandler(void *dm_handle, const aiot_dm_recv_t *recv, void *userdata)
 {
@@ -88,7 +214,7 @@ void MqttClient::DmRecvHandler(void *dm_handle, const aiot_dm_recv_t *recv, void
     /* 异步服务调用 */
     case AIOT_DMRECV_ASYNC_SERVICE_INVOKE:
     {
-        // demo_dm_recv_async_service_invoke(dm_handle, recv, userdata);
+        DmRecvAsyncServiceInvoke(dm_handle, recv, userdata);
     }
     break;
 
@@ -130,7 +256,7 @@ int MqttClient::Connect()
 
     /* 安全凭据结构体, 如果要用TLS, 这个结构体中配置CA证书等参数 */
     /* 配置SDK的底层依赖 */
-    aiot_sysdep_set_portfile(&g_aiot_sysdep_portfile_);
+    aiot_sysdep_set_portfile(&g_aiot_sysdep_portfile);
     /* 配置SDK的日志输出 */
     aiot_state_set_logcb(StateLogcb);
     /* 创建SDK的安全凭据, 用于建立TLS连接 */
@@ -138,8 +264,8 @@ int MqttClient::Connect()
     cred_.option = AIOT_SYSDEP_NETWORK_CRED_SVRCERT_CA; /* 使用RSA证书校验MQTT服务端 */
     cred_.max_tls_fragment = 16384;                     /* 最大的分片长度为16K, 其它可选值还有4K, 2K, 1K, 0.5K */
     cred_.sni_enabled = 1;                              /* TLS建连时, 支持Server Name Indicator */
-    cred_.x509_server_cert = ali_ca_cert_;              /* 用来验证MQTT服务端的RSA根证书 */
-    cred_.x509_server_cert_len = strlen(ali_ca_cert_);  /* 用来验证MQTT服务端的RSA根证书长度 */
+    cred_.x509_server_cert = ali_ca_cert;               /* 用来验证MQTT服务端的RSA根证书 */
+    cred_.x509_server_cert_len = strlen(ali_ca_cert);   /* 用来验证MQTT服务端的RSA根证书长度 */
 
     /* 创建1个MQTT客户端实例并内部初始化默认参数 */
     mqtt_handle_ = aiot_mqtt_init();
@@ -198,13 +324,43 @@ int MqttClient::Connect()
 }
 bool MqttClient::Subscribe(std::string topic)
 {
+    if (!topic.empty())
+        aiot_mqtt_sub(mqtt_handle_, (char *)topic.c_str(), NULL, 1, NULL);
     return true;
 }
-bool MqttClient::Publish(std::string topic, std::string payload)
+
+// bool MqttClient::Publish(std::string topic, std::string payload)
+// {
+//     int32_t res = STATE_SUCCESS;
+//     res = aiot_mqtt_pub(mqtt_handle_, (char *)topic.c_str(), (uint8_t *)payload.c_str(), (uint32_t)payload.size(), 0);
+//     if (res < 0)
+//     {
+//         XF_LOGT(ERROR, TAG, "aiot_mqtt_sub failed, res: -0x%04X\n", -res);
+//         return false;
+//     }
+//     return true;
+// }
+
+bool MqttClient::Publish(std::string payload)
 {
+    int32_t res = STATE_SUCCESS;
+    res = aiot_mqtt_pub(mqtt_handle_, (char *)publish_topic_.c_str(), (uint8_t *)payload.c_str(), (uint32_t)payload.size(), 0);
+    if (res < 0)
+    {
+        XF_LOGT(ERROR, TAG, "aiot_mqtt_sub failed, res: -0x%04X\n", -res);
+        return false;
+    }
+
     return true;
 }
+
 bool MqttClient::IsConnect()
 {
+    return true;
+}
+
+bool MqttClient::AddCallBack(callback_t cb)
+{
+    usart_send_cb_ = cb;
     return true;
 }

@@ -43,7 +43,7 @@ done
 pushd ${out_dir} > /dev/null
 
 if [[ -z "$only_make" ]]; then
-    cmake ..
+    cmake .. -DCMAKE_BUILD_TYPE=Debug
 fi
 
 make -j  "$(nproc)" $specify_targets

@@ -70,12 +70,13 @@ set(CMAKE_CXX_FLAGS  "${XT_COMPILE_FLAGS}")
 
 aux_source_directory(${PROJECT_SOURCE_DIR}/xfframework       XFFRAMEWORK_SRC_FILES)
 aux_source_directory(${PROJECT_SOURCE_DIR}/usart             USART_SRC_FILES)
-
+aux_source_directory(${PROJECT_SOURCE_DIR}/mqtt              MQTT_SRC_FILES)
 set(TARGET_NAME hospital5g)
 add_executable(${TARGET_NAME}
     main.cc
     ${XFFRAMEWORK_SRC_FILES}
     ${USART_SRC_FILES}
+    ${MQTT_SRC_FILES}
   )
 
 

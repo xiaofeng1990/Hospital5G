@@ -45,13 +45,18 @@ int Usart::Open()
 
 void Usart::Run()
 {
-
+    char buf[1024];
     while (!stopped_.load(std::memory_order_consume))
     {
-        char buf[1024];
+
         Read(buf, 1024);
         XF_LOGT(INFO, TAG, "usart get data %s\n", buf);
         // 收到数据不为空，就调用mqtt发送函数
+        if (strlen(buf) != 0)
+        {
+            mqtt_send_cb_(buf);
+        }
+        memset(buf, 0, sizeof(buf));
     }
 }
 
@@ -74,7 +79,9 @@ int Usart::Read(char *buf, int len)
         if (number >= len)
             break;
 
-    } while (serialDataAvail(fd_));
+    } while (serialDataAvail(fd_) > 0);
     serialFlush(fd_);
+    fflush(stdout);
+
     return number;
 }
